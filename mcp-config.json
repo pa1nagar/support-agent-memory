@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "cockroachdb": {
+      "command": "npx",
+      "args": ["-y", "@cockroachlabs/mcp-server-cockroachdb"],
+      "env": {
+        "COCKROACHDB_URL": "postgresql://pawan:Fr9D7U2-wmqCPZ5A6vbpcg@nordic-saiga-30292.j77.aws-us-east-1.cockroachlabs.cloud:26257/defaultdb?sslmode=require"
+      },
+      "disabled": false,
+      "description": "CockroachDB Managed MCP Server for database operations and queries"
+    }
+  },
+  "note": "This configuration enables the CockroachDB MCP Server as required by the hackathon. The server provides secure, audited database access for the AI agent."
+}

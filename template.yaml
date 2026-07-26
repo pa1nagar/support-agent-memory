@@ -1,0 +1,169 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Support Agent Memory - CockroachDB × AWS Hackathon
+  AI Support Agent with Persistent Memory using CockroachDB and AWS Bedrock
+
+# ============================================
+# Global Settings
+# ============================================
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 512
+    Runtime: python3.11
+    Architectures:
+      - x86_64
+    Environment:
+      Variables:
+        ENVIRONMENT: !Ref Environment
+        LOG_LEVEL: INFO
+        AWS_REGION: !Ref AWS::Region
+
+# ============================================
+# Parameters
+# ============================================
+Parameters:
+  Environment:
+    Type: String
+    Default: development
+    AllowedValues:
+      - development
+      - staging
+      - production
+    Description: Deployment environment
+  
+  CockroachDBURL:
+    Type: String
+    Description: CockroachDB connection URL (from Cloud Console)
+    NoEcho: true
+  
+  MemoryRetrievalLimit:
+    Type: Number
+    Default: 5
+    Description: Number of memories to retrieve per query
+  
+  MemorySimilarityThreshold:
+    Type: Number
+    Default: 0.7
+    MinValue: 0.0
+    MaxValue: 1.0
+    Description: Minimum similarity threshold for memory retrieval (0.0 to 1.0)
+
+# ============================================
+# Resources
+# ============================================
+Resources:
+  
+  # Lambda Function
+  SupportAgentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-agent'
+      CodeUri: backend/
+      Handler: handler.handler
+      Description: Support Agent Memory API
+      Environment:
+        Variables:
+          COCKROACHDB_URL: !Ref CockroachDBURL
+          MEMORY_RETRIEVAL_LIMIT: !Ref MemoryRetrievalLimit
+          MEMORY_SIMILARITY_THRESHOLD: !Ref MemorySimilarityThreshold
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Statement:
+          - Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+            Resource:
+              - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/anthropic.claude-3-5-sonnet-20240620-v1:0'
+              - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0'
+        - Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-agent:*'
+      FunctionUrlConfig:
+        AuthType: NONE
+        Cors:
+          AllowOrigins:
+            - '*'
+          AllowMethods:
+            - GET
+            - POST
+            - OPTIONS
+          AllowHeaders:
+            - '*'
+          MaxAge: 300
+      Tags:
+        Project: support-agent-memory
+        Hackathon: CockroachDB-AWS
+        Environment: !Ref Environment
+
+  # CloudWatch Log Group
+  SupportAgentLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-agent'
+      RetentionInDays: 7
+
+  # S3 Bucket for Frontend (optional - for hosting the HTML)
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-frontend-${AWS::AccountId}'
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      Tags:
+        - Key: Project
+          Value: support-agent-memory
+        - Key: Hackathon
+          Value: CockroachDB-AWS
+
+  # S3 Bucket Policy (allow public read)
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Statement:
+          - Sid: PublicReadGetObject
+            Effect: Allow
+            Principal: '*'
+            Action: 's3:GetObject'
+            Resource: !Sub '${FrontendBucket.Arn}/*'
+
+# ============================================
+# Outputs
+# ============================================
+Outputs:
+  ApiUrl:
+    Description: 'Lambda Function URL for the API'
+    Value: !GetAtt SupportAgentFunctionUrl.FunctionUrl
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiUrl'
+  
+  FrontendUrl:
+    Description: 'S3 Static Website URL for the Frontend'
+    Value: !GetAtt FrontendBucket.WebsiteURL
+    Export:
+      Name: !Sub '${AWS::StackName}-FrontendUrl'
+  
+  FunctionArn:
+    Description: 'Lambda Function ARN'
+    Value: !GetAtt SupportAgentFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-FunctionArn'
+  
+  LogGroupName:
+    Description: 'CloudWatch Log Group Name'
+    Value: !Ref SupportAgentLogGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-LogGroup'

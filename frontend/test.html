@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>API Test</title>
+</head>
+<body>
+    <h1>Support Agent Memory - Test</h1>
+    <button onclick="testAPI()">Test API</button>
+    <pre id="result"></pre>
+
+    <script>
+        async function testAPI() {
+            const resultDiv = document.getElementById('result');
+            resultDiv.textContent = 'Testing...';
+            
+            try {
+                // Test health
+                const health = await fetch('http://localhost:8000/health');
+                const healthData = await health.json();
+                resultDiv.textContent = 'Health: ' + JSON.stringify(healthData, null, 2) + '\n\n';
+                
+                // Test chat
+                const chat = await fetch('http://localhost:8000/chat', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        user_id: 'c6a54245-1d39-55fd-8263-9f0c510ddc0a',
+                        message: 'Hello, I need help'
+                    })
+                });
+                const chatData = await chat.json();
+                resultDiv.textContent += 'Chat Response:\n' + JSON.stringify(chatData, null, 2);
+                
+            } catch (error) {
+                resultDiv.textContent = 'Error: ' + error.message;
+            }
+        }
+    </script>
+</body>
+</html>

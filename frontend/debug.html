@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Debug Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .test-section {
+            background: white;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #5568d3;
+        }
+        .result {
+            background: #f9f9f9;
+            padding: 15px;
+            margin-top: 10px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+            max-height: 400px;
+            overflow: auto;
+        }
+        .success { color: green; }
+        .error { color: red; }
+        input {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔍 API Debug Tool</h1>
+    
+    <div class="test-section">
+        <h2>1. Test Health Endpoint</h2>
+        <button onclick="testHealth()">Test /health</button>
+        <div id="health-result" class="result" style="display:none;"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>2. Test Chat Endpoint</h2>
+        <input type="text" id="chatMessage" placeholder="Enter message..." value="I'm having login issues">
+        <button onclick="testChat()">Send Chat Message</button>
+        <div id="chat-result" class="result" style="display:none;"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>3. Test Memory Debug</h2>
+        <button onclick="testMemoryDebug()">Test /memory-debug</button>
+        <div id="memory-result" class="result" style="display:none;"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>4. Browser Console Check</h2>
+        <p>Open browser console (F12) to see detailed logs</p>
+        <button onclick="testConsole()">Test Console</button>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:8000';
+        const USER_ID = 'c6a54245-1d39-55fd-8263-9f0c510ddc0a';
+
+        async function testHealth() {
+            const result = document.getElementById('health-result');
+            result.style.display = 'block';
+            result.innerHTML = 'Testing...';
+            
+            try {
+                console.log('Testing health endpoint:', API_URL + '/health');
+                const response = await fetch(API_URL + '/health');
+                console.log('Response status:', response.status);
+                
+                const data = await response.json();
+                console.log('Response data:', data);
+                
+                result.innerHTML = `<div class="success">✅ Success!</div><pre>${JSON.stringify(data, null, 2)}</pre>`;
+            } catch (error) {
+                console.error('Health test error:', error);
+                result.innerHTML = `<div class="error">❌ Error: ${error.message}</div>`;
+            }
+        }
+
+        async function testChat() {
+            const result = document.getElementById('chat-result');
+            const message = document.getElementById('chatMessage').value;
+            result.style.display = 'block';
+            result.innerHTML = 'Sending...';
+            
+            try {
+                console.log('Testing chat endpoint with message:', message);
+                const response = await fetch(API_URL + '/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        user_id: USER_ID,
+                        message: message
+                    })
+                });
+                
+                console.log('Response status:', response.status);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                console.log('Response data:', data);
+                
+                result.innerHTML = `
+                    <div class="success">✅ Success!</div>
+                    <p><strong>Response:</strong> ${data.response}</p>
+                    <p><strong>Memories used:</strong> ${data.memories_used.length}</p>
+                    <p><strong>Processing time:</strong> ${data.processing_time_ms}ms</p>
+                    <details>
+                        <summary>Full Response</summary>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    </details>
+                `;
+            } catch (error) {
+                console.error('Chat test error:', error);
+                result.innerHTML = `<div class="error">❌ Error: ${error.message}</div>`;
+            }
+        }
+
+        async function testMemoryDebug() {
+            const result = document.getElementById('memory-result');
+            result.style.display = 'block';
+            result.innerHTML = 'Testing...';
+            
+            try {
+                console.log('Testing memory debug endpoint');
+                const response = await fetch(API_URL + '/memory-debug/' + USER_ID + '?test_query=login issues');
+                console.log('Response status:', response.status);
+                
+                const data = await response.json();
+                console.log('Response data:', data);
+                
+                result.innerHTML = `
+                    <div class="success">✅ Success!</div>
+                    <p><strong>Memories found:</strong> ${data.memories_found || 0}</p>
+                    <p><strong>Retrieval time:</strong> ${data.retrieval_time_ms || 0}ms</p>
+                    <details>
+                        <summary>Full Response</summary>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    </details>
+                `;
+            } catch (error) {
+                console.error('Memory debug error:', error);
+                result.innerHTML = `<div class="error">❌ Error: ${error.message}</div>`;
+            }
+        }
+
+        function testConsole() {
+            console.log('✅ Console is working!');
+            console.log('API URL:', API_URL);
+            console.log('User ID:', USER_ID);
+            alert('Check the browser console (F12) for output');
+        }
+
+        // Test CORS on page load
+        window.addEventListener('load', () => {
+            console.log('=== Debug Tool Loaded ===');
+            console.log('API URL:', API_URL);
+            console.log('User ID:', USER_ID);
+            console.log('Ready to test!');
+        });
+    </script>
+</body>
+</html>
