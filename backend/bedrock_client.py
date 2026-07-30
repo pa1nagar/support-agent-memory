@@ -87,7 +87,7 @@ class BedrockClient:
         temperature: float = 0.7
     ) -> str:
         """
-        Generate response using Claude 3.5 Sonnet with memory context
+        Generate response using Bedrock LLM (supports both Claude and Titan)
         
         Args:
             user_message: The current user query
@@ -101,67 +101,129 @@ class BedrockClient:
             Generated response text
         """
         try:
+            # Determine model type from model ID
+            model_lower = self.llm_model_id.lower()
+            is_claude = 'claude' in model_lower
+            is_titan = 'titan' in model_lower
+            is_nova = 'nova' in model_lower
+            
             # Build system prompt with memory context
             system_prompt = self._build_system_prompt(
                 retrieved_memories, 
                 user_context
             )
             
-            # Build conversation history
-            messages = []
-            
-            # Add recent conversation messages if available
+            # Build messages list (shared by Claude and Nova)
+            all_messages = []
             if recent_messages:
                 for msg in recent_messages:
-                    messages.append({
-                        "role": msg['role'],
-                        "content": msg['content']
-                    })
-            
-            # Add current user message
-            messages.append({
-                "role": "user",
-                "content": user_message
-            })
-            
-            # Claude 3.5 request format
-            request_body = {
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-                "system": system_prompt,
-                "messages": messages
-            }
-            
-            logger.debug(f"Calling Claude with {len(messages)} messages")
-            
-            response = self.client.invoke_model(
-                modelId=self.llm_model_id,
-                body=json.dumps(request_body),
-                contentType='application/json',
-                accept='application/json'
-            )
-            
-            response_body = json.loads(response['body'].read())
-            
-            # Extract text from response
-            content = response_body.get('content', [])
-            if not content:
-                raise ValueError("No content in Claude response")
-            
-            response_text = content[0].get('text', '')
-            
-            logger.info(f"Generated response: {len(response_text)} characters")
-            return response_text
+                    role = msg['role'] if msg['role'] in ('user', 'assistant') else 'user'
+                    all_messages.append({"role": role, "content": msg['content']})
+            all_messages.append({"role": "user", "content": user_message})
+
+            if is_claude:
+                # Claude Messages API format
+                request_body = {
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "system": system_prompt,
+                    "messages": all_messages,
+                    "max_tokens": max_tokens,
+                    "temperature": temperature
+                }
+                
+                logger.debug(f"Calling Claude: {self.llm_model_id}")
+                response = self.client.invoke_model(
+                    modelId=self.llm_model_id,
+                    body=json.dumps(request_body),
+                    contentType='application/json',
+                    accept='application/json'
+                )
+                response_body = json.loads(response['body'].read())
+                response_text = response_body['content'][0]['text']
+                logger.info(f"Generated {len(response_text)} chars from {self.llm_model_id}")
+                return response_text
+
+            elif is_nova:
+                # Amazon Nova: messages format with content as list of text objects
+                nova_messages = []
+                if recent_messages:
+                    for msg in recent_messages:
+                        role = msg['role'] if msg['role'] in ('user', 'assistant') else 'user'
+                        nova_messages.append({"role": role, "content": [{"text": msg['content']}]})
+                nova_messages.append({"role": "user", "content": [{"text": user_message}]})
+                
+                request_body = {
+                    "system": [{"text": system_prompt}],
+                    "messages": nova_messages,
+                    "inferenceConfig": {
+                        "maxTokens": max_tokens,
+                        "temperature": temperature
+                    }
+                }
+                
+                logger.debug(f"Calling Nova: {self.llm_model_id}")
+                response = self.client.invoke_model(
+                    modelId=self.llm_model_id,
+                    body=json.dumps(request_body),
+                    contentType='application/json',
+                    accept='application/json'
+                )
+                response_body = json.loads(response['body'].read())
+                response_text = response_body['output']['message']['content'][0]['text']
+                logger.info(f"Generated {len(response_text)} chars from {self.llm_model_id}")
+                return response_text
+                
+            elif is_titan:
+                # Titan uses text completion format with single prompt
+                full_prompt = f"{system_prompt}\n\n"
+                
+                if recent_messages:
+                    full_prompt += "Recent conversation:\n"
+                    for msg in recent_messages:
+                        role_label = "User" if msg['role'] == 'user' else "Assistant"
+                        full_prompt += f"{role_label}: {msg['content']}\n"
+                    full_prompt += "\n"
+                
+                full_prompt += f"User: {user_message}\n\nAssistant:"
+                
+                request_body = {
+                    "inputText": full_prompt,
+                    "textGenerationConfig": {
+                        "maxTokenCount": max_tokens,
+                        "temperature": temperature,
+                        "topP": 0.9
+                    }
+                }
+                
+                response = self.client.invoke_model(
+                    modelId=self.llm_model_id,
+                    body=json.dumps(request_body),
+                    contentType='application/json',
+                    accept='application/json'
+                )
+                response_body = json.loads(response['body'].read())
+                results = response_body.get('results', [])
+                if not results:
+                    raise ValueError("No results in Titan response")
+                response_text = results[0].get('outputText', '').strip()
+                logger.info(f"Generated {len(response_text)} chars from {self.llm_model_id}")
+                return response_text
+                
+            else:
+                raise ValueError(f"Unsupported model: {self.llm_model_id}")
             
         except ClientError as e:
             error_code = e.response['Error']['Code']
+            error_message = e.response['Error'].get('Message', '')
+            
             if error_code == 'AccessDeniedException':
-                logger.error(
-                    "Bedrock access denied for Claude. Ensure model access is enabled."
-                )
+                logger.error(f"Bedrock access denied for {self.llm_model_id}: {error_message}")
+            elif error_code == 'ValidationException':
+                logger.error(f"Invalid request for {self.llm_model_id}: {error_message}")
             elif error_code == 'ThrottlingException':
                 logger.warning("Bedrock throttling - request rate too high")
+            
+            logger.error(f"Bedrock error: {error_code} - {error_message}")
             raise
         except Exception as e:
             logger.error(f"Error generating response: {str(e)}", exc_info=True)
@@ -186,7 +248,13 @@ class BedrockClient:
             for key, data in user_context.items():
                 confidence = data.get('confidence', 0)
                 value = data.get('value', '')
-                prompt_parts.append(f"- {key}: {value} (confidence: {confidence:.0%})")
+                # Make name and location especially prominent
+                if key == 'user_name':
+                    prompt_parts.insert(1, f"IMPORTANT: This user's name is {value}. Always address them by name.")
+                elif key == 'location':
+                    prompt_parts.append(f"- Location: {value} (confidence: {confidence:.0%})")
+                else:
+                    prompt_parts.append(f"- {key}: {value} (confidence: {confidence:.0%})")
             prompt_parts.append("")
         
         # Add retrieved memories

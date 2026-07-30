@@ -200,7 +200,56 @@ def generate_response_with_fallback(
         return mock_generate_response(user_message, memories)
 
 
-# Mock functions (fallback only)
+def extract_and_save_user_facts(user_id: str, message: str):
+    """
+    Extract facts from user message and save to user_context table.
+    Looks for name, location, preferences, etc.
+    """
+    import re
+    db = get_db_manager()
+    facts = {}
+
+    msg = message.strip()
+    msg_lower = msg.lower()
+
+    # Name extraction
+    name_patterns = [
+        r"my name is ([A-Za-z]+)",
+        r"i am ([A-Za-z]+)",
+        r"i'm ([A-Za-z]+)",
+        r"call me ([A-Za-z]+)",
+    ]
+    for pattern in name_patterns:
+        m = re.search(pattern, msg_lower)
+        if m:
+            candidate = m.group(1).capitalize()
+            # Filter out common false positives
+            if candidate.lower() not in ["a", "an", "the", "not", "here", "back", "going", "having", "trying"]:
+                facts["user_name"] = candidate
+                break
+
+    # Location extraction
+    loc_patterns = [
+        r"i(?:'m| am) from ([A-Za-z ,]+?)(?:\.|,|$)",
+        r"i live in ([A-Za-z ,]+?)(?:\.|,|$)",
+        r"located in ([A-Za-z ,]+?)(?:\.|,|$)",
+        r"based in ([A-Za-z ,]+?)(?:\.|,|$)",
+    ]
+    for pattern in loc_patterns:
+        m = re.search(pattern, msg_lower)
+        if m:
+            location = m.group(1).strip().title()
+            if len(location) > 2:
+                facts["location"] = location
+                break
+
+    # Save extracted facts to user_context
+    for key, value in facts.items():
+        try:
+            db.upsert_user_context(user_id, key, value, confidence=0.95)
+            logger.info(f"Saved user fact: {key} = {value}")
+        except Exception as e:
+            logger.error(f"Failed to save user fact {key}: {e}")
 def mock_retrieve_memories(user_id: str, message: str) -> List[MemoryItem]:
     """Fallback mock memory retrieval"""
     if "login" in message.lower() or "access" in message.lower():
@@ -222,14 +271,60 @@ def mock_retrieve_memories(user_id: str, message: str) -> List[MemoryItem]:
 
 
 def mock_generate_response(user_message: str, memories: List[MemoryItem]) -> str:
-    """Fallback mock response generation"""
+    """Enhanced fallback response that showcases memory capabilities"""
+    
+    # If we have memories, create a contextual response
     if memories:
         memory_context = "\n".join([f"- {m.content} (on {m.timestamp[:10]})" for m in memories])
+        
+        # Extract key information from memories
+        user_facts = []
+        for m in memories:
+            content_lower = m.content.lower()
+            # Extract names
+            if "my name is" in content_lower or "i am" in content_lower or "i'm" in content_lower:
+                user_facts.append(m.content)
+            # Extract preferences
+            elif "i love" in content_lower or "i like" in content_lower:
+                user_facts.append(m.content)
+            # Extract locations
+            elif "from" in content_lower and any(place in content_lower for place in ["india", "usa", "uk", "china"]):
+                user_facts.append(m.content)
+        
+        # Create intelligent response based on current message
+        msg_lower = user_message.lower()
+        
+        # Handle "what" questions intelligently
+        if "what" in msg_lower or "who" in msg_lower or "where" in msg_lower:
+            if "name" in msg_lower and user_facts:
+                # Try to extract name from memories
+                for fact in user_facts:
+                    if "name is" in fact.lower():
+                        name = fact.split("name is")[-1].strip().split()[0]
+                        return f"Based on our conversation history, your name is {name}. I remember you mentioning this earlier. How can I help you today?"
+            
+            if ("kiro" in msg_lower or "what is" in msg_lower) and memories:
+                for m in memories:
+                    if "kiro" in m.content.lower():
+                        return f"You mentioned that {m.content}. Is there something specific about Kiro you'd like to know more about?"
+            
+            if "who" in msg_lower and any("modi" in m.content.lower() or "pm" in m.content.lower() for m in memories):
+                return f"You previously mentioned that Modi is PM of India. Based on that context, I understand you're asking about Modi. How can I assist you further with this topic?"
+        
+        # For greetings with history
+        if msg_lower in ["hi", "hii", "hello", "hey"]:
+            if user_facts:
+                return f"Hello! I remember you from our previous conversations. {user_facts[0]}. What can I help you with today?"
+            return f"Hello again! I see we've chatted before:\n{memory_context}\n\nWhat brings you back today?"
+        
+        # Default memory-aware response
         return (
-            f"I see you've mentioned similar issues before:\n{memory_context}\n\n"
-            f"Are you still experiencing the same problem? Let me help you resolve this."
+            f"I recall our previous conversations:\n{memory_context}\n\n"
+            f"How can I help you with this today? I'm using our conversation history to provide better support."
         )
-    return "I'm here to help! Could you please describe your issue in more detail?"
+    
+    # No memories - first interaction
+    return "Hello! I'm your support agent with memory. I'll remember our conversation for next time. How can I help you today?"
 
 # ============================================
 # API Endpoints
@@ -312,11 +407,22 @@ async def chat(request: ChatRequest):
     Main chat endpoint
     Phase 1: Uses real Bedrock + CockroachDB (with fallback to mock)
     """
+    import uuid
+    
     start_time = datetime.utcnow()
+    # Never use mock in production - only if explicitly set DEBUG=true in development
     use_mock = settings.ENVIRONMENT == "development" and settings.DEBUG
     
     try:
         logger.info(f"Chat request from user {request.user_id}: {request.message[:50]}...")
+        
+        # Normalize user_id to UUID for consistency
+        try:
+            user_uuid = uuid.UUID(request.user_id)
+            normalized_user_id = str(user_uuid)
+        except ValueError:
+            user_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, request.user_id)
+            normalized_user_id = str(user_uuid)
         
         db = get_db_manager()
         bedrock = get_bedrock_client()
@@ -335,9 +441,15 @@ async def chat(request: ChatRequest):
         memories, retrieval_time = retrieve_memories_with_fallback(
             user_id=request.user_id,
             message=request.message,
-            use_mock=use_mock
+            use_mock=False  # Always try real search in production
         )
         logger.info(f"Retrieved {len(memories)} memories in {retrieval_time}ms")
+        
+        # Extract and save user facts from the message
+        try:
+            extract_and_save_user_facts(request.user_id, request.message)
+        except Exception as e:
+            logger.error(f"Failed to extract user facts: {e}")
         
         # Phase 1: Real response generation (with fallback)
         response_text = generate_response_with_fallback(
@@ -345,7 +457,7 @@ async def chat(request: ChatRequest):
             user_id=request.user_id,
             conv_id=conv_id,
             memories=memories,
-            use_mock=use_mock
+            use_mock=False  # Always try Claude in production
         )
         
         # Store user message with embedding

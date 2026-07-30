@@ -45,12 +45,25 @@ class DatabaseManager:
     
     def get_or_create_user(self, user_id: str, email: str = None, name: str = None) -> Dict[str, Any]:
         """Get existing user or create new one"""
+        import uuid
+        
         with self.get_connection() as conn:
             with conn.cursor() as cur:
+                # Check if user_id looks like a UUID
+                try:
+                    user_uuid = uuid.UUID(user_id)
+                    user_id_to_use = str(user_uuid)
+                except ValueError:
+                    # Not a UUID, generate one from the user_id string
+                    # Use UUID v5 (namespace-based) for consistency
+                    user_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, user_id)
+                    user_id_to_use = str(user_uuid)
+                    logger.info(f"Converted user_id '{user_id}' to UUID: {user_id_to_use}")
+                
                 # Try to get existing user
                 cur.execute(
-                    "SELECT * FROM users WHERE user_id = %s",
-                    (user_id,)
+                    "SELECT * FROM users WHERE user_id = %s::uuid",
+                    (user_id_to_use,)
                 )
                 user = cur.fetchone()
                 
@@ -64,14 +77,14 @@ class DatabaseManager:
                 cur.execute(
                     """
                     INSERT INTO users (user_id, email, name)
-                    VALUES (%s, %s, %s)
+                    VALUES (%s::uuid, %s, %s)
                     ON CONFLICT (email) DO UPDATE SET updated_at = now()
                     RETURNING *
                     """,
-                    (user_id, email, name)
+                    (user_id_to_use, email, name)
                 )
                 user = cur.fetchone()
-                logger.info(f"Created new user: {user_id}")
+                logger.info(f"Created new user: {user_id_to_use}")
                 return dict(user)
     
     def get_or_create_conversation(
@@ -80,13 +93,23 @@ class DatabaseManager:
         conv_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Get existing conversation or create new one"""
+        import uuid
+        
+        # Normalize user_id to UUID
+        try:
+            user_uuid = uuid.UUID(user_id)
+            user_id_to_use = str(user_uuid)
+        except ValueError:
+            user_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, user_id)
+            user_id_to_use = str(user_uuid)
+        
         with self.get_connection() as conn:
             with conn.cursor() as cur:
                 if conv_id:
                     # Try to get existing conversation
                     cur.execute(
-                        "SELECT * FROM conversations WHERE conv_id = %s AND user_id = %s",
-                        (conv_id, user_id)
+                        "SELECT * FROM conversations WHERE conv_id = %s::uuid AND user_id = %s::uuid",
+                        (conv_id, user_id_to_use)
                     )
                     conv = cur.fetchone()
                     if conv:
@@ -96,10 +119,10 @@ class DatabaseManager:
                 cur.execute(
                     """
                     INSERT INTO conversations (user_id, title, status)
-                    VALUES (%s, %s, %s)
+                    VALUES (%s::uuid, %s, %s)
                     RETURNING *
                     """,
-                    (user_id, "New conversation", "active")
+                    (user_id_to_use, "New conversation", "active")
                 )
                 conv = cur.fetchone()
                 logger.info(f"Created new conversation: {conv['conv_id']}")
@@ -115,6 +138,16 @@ class DatabaseManager:
         metadata: Optional[Dict] = None
     ) -> str:
         """Store a message in the database"""
+        import uuid
+        
+        # Normalize user_id to UUID
+        try:
+            user_uuid = uuid.UUID(user_id)
+            user_id_to_use = str(user_uuid)
+        except ValueError:
+            user_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, user_id)
+            user_id_to_use = str(user_uuid)
+        
         with self.get_connection() as conn:
             with conn.cursor() as cur:
                 # Convert embedding to pgvector format
@@ -128,10 +161,10 @@ class DatabaseManager:
                 cur.execute(
                     """
                     INSERT INTO messages (conv_id, user_id, role, content, embedding, metadata)
-                    VALUES (%s, %s, %s, %s, %s::vector, %s::jsonb)
+                    VALUES (%s::uuid, %s::uuid, %s, %s, %s::vector, %s::jsonb)
                     RETURNING msg_id
                     """,
-                    (conv_id, user_id, role, content, embedding_str, metadata_str)
+                    (conv_id, user_id_to_use, role, content, embedding_str, metadata_str)
                 )
                 msg_id = cur.fetchone()['msg_id']
                 logger.info(f"Stored message: {msg_id} (role: {role})")
@@ -148,6 +181,16 @@ class DatabaseManager:
         Search for similar messages using vector similarity
         Uses CockroachDB's HNSW index for fast semantic search
         """
+        import uuid
+        
+        # Normalize user_id to UUID
+        try:
+            user_uuid = uuid.UUID(user_id)
+            user_id_to_use = str(user_uuid)
+        except ValueError:
+            user_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, user_id)
+            user_id_to_use = str(user_uuid)
+        
         start_time = time.time()
         
         with self.get_connection() as conn:
@@ -167,13 +210,13 @@ class DatabaseManager:
                         created_at,
                         (1 - (embedding <=> %s::vector))::float AS similarity
                     FROM messages
-                    WHERE user_id = %s
+                    WHERE user_id = %s::uuid
                       AND embedding IS NOT NULL
                       AND (1 - (embedding <=> %s::vector)) > %s
                     ORDER BY embedding <=> %s::vector
                     LIMIT %s
                     """,
-                    (embedding_str, user_id, embedding_str, similarity_threshold, embedding_str, limit)
+                    (embedding_str, user_id_to_use, embedding_str, similarity_threshold, embedding_str, limit)
                 )
                 
                 results = cur.fetchall()
@@ -210,16 +253,26 @@ class DatabaseManager:
     
     def get_user_context(self, user_id: str) -> Dict[str, Any]:
         """Get consolidated context about a user"""
+        import uuid
+        
+        # Normalize user_id to UUID
+        try:
+            user_uuid = uuid.UUID(user_id)
+            user_id_to_use = str(user_uuid)
+        except ValueError:
+            user_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, user_id)
+            user_id_to_use = str(user_uuid)
+        
         with self.get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     SELECT context_key, context_value, confidence, updated_at
                     FROM user_context
-                    WHERE user_id = %s
+                    WHERE user_id = %s::uuid
                     ORDER BY confidence DESC
                     """,
-                    (user_id,)
+                    (user_id_to_use,)
                 )
                 results = cur.fetchall()
                 
@@ -245,6 +298,16 @@ class DatabaseManager:
         retrieval_time_ms: int
     ):
         """Log memory retrieval for audit and observability"""
+        import uuid
+        
+        # Normalize user_id to UUID
+        try:
+            user_uuid = uuid.UUID(user_id)
+            user_id_to_use = str(user_uuid)
+        except ValueError:
+            user_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, user_id)
+            user_id_to_use = str(user_uuid)
+        
         with self.get_connection() as conn:
             with conn.cursor() as cur:
                 embedding_str = f"[{','.join(map(str, query_embedding))}]"
@@ -255,10 +318,10 @@ class DatabaseManager:
                         user_id, query_embedding, retrieved_msg_ids, 
                         retrieval_scores, query_text, response_text, retrieval_time_ms
                     )
-                    VALUES (%s, %s::vector, %s, %s, %s, %s, %s)
+                    VALUES (%s::uuid, %s::vector, %s, %s, %s, %s, %s)
                     """,
                     (
-                        user_id,
+                        user_id_to_use,
                         embedding_str,
                         retrieved_msg_ids,
                         retrieval_scores,
@@ -269,6 +332,30 @@ class DatabaseManager:
                 )
                 logger.debug(f"Logged memory retrieval for user {user_id}")
     
+    def upsert_user_context(self, user_id: str, key: str, value: str, confidence: float = 1.0):
+        """Insert or update a user context fact"""
+        import uuid
+        try:
+            user_uuid = uuid.UUID(user_id)
+            user_id_to_use = str(user_uuid)
+        except ValueError:
+            user_id_to_use = str(uuid.uuid5(uuid.NAMESPACE_DNS, user_id))
+
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO user_context (user_id, context_key, context_value, confidence)
+                    VALUES (%s::uuid, %s, %s, %s)
+                    ON CONFLICT (user_id, context_key)
+                    DO UPDATE SET context_value = EXCLUDED.context_value,
+                                  confidence = EXCLUDED.confidence,
+                                  updated_at = now()
+                    """,
+                    (user_id_to_use, key, value, confidence)
+                )
+                logger.info(f"Upserted user context: {key}={value} for {user_id_to_use}")
+
     def health_check(self) -> bool:
         """Check if database is accessible"""
         try:
