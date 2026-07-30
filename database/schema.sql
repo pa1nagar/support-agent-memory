@@ -92,23 +92,19 @@ CREATE INDEX IF NOT EXISTS idx_user_context_user_id ON user_context(user_id);
 CREATE INDEX IF NOT EXISTS idx_memory_audit_user_id ON memory_audit(user_id);
 
 -- ============================================
--- 🚀 DISTRIBUTED VECTOR INDEX (Required Tool #2)
--- CockroachDB Distributed Vector Indexing
--- This is a MANDATORY hackathon requirement!
+-- 🚀 DISTRIBUTED VECTOR INDEX (Required Hackathon Tool #1)
+-- CockroachDB Distributed HNSW Vector Indexing
+-- Enables sub-second cosine similarity search at scale
 -- ============================================
--- Note: Using basic vector index for compatibility
--- CockroachDB 24.3+ supports HNSW, but for broader compatibility we use standard index
-CREATE INDEX IF NOT EXISTS idx_messages_embedding 
-ON messages 
-USING GIN (embedding);
+CREATE INDEX IF NOT EXISTS idx_messages_embedding
+ON messages
+USING HNSW (embedding vector_cosine_ops)
+WITH (m = 16, ef_construction = 64);
 
--- Alternative syntax for newer CockroachDB versions (24.3+):
--- CREATE INDEX IF NOT EXISTS idx_messages_embedding 
--- ON messages 
--- USING HNSW (embedding vector_cosine_ops);
-
--- For now, vector search will use sequential scan with index hint
--- This is still a distributed vector index as it works across all nodes
+-- Cosine similarity query pattern:
+--   SELECT msg_id, content, (1 - (embedding <=> $1::vector)) AS similarity
+--   FROM messages WHERE user_id = $2
+--   ORDER BY embedding <=> $1::vector LIMIT 5;
 
 -- ============================================
 -- SAMPLE DATA (for testing Phase 0)
@@ -142,39 +138,17 @@ ON CONFLICT (user_id, context_key) DO UPDATE SET
     updated_at = now();
 
 -- ============================================
--- UTILITY FUNCTIONS
+-- VECTOR SEARCH QUERY PATTERN
+-- Use directly in application code (database.py)
 -- ============================================
-
--- Function to search similar messages using vector similarity
--- Usage: SELECT * FROM search_similar_messages($embedding, $user_id, 5);
-CREATE OR REPLACE FUNCTION search_similar_messages(
-    query_embedding VECTOR(1024),
-    target_user_id UUID,
-    limit_count INT DEFAULT 5
-)
-RETURNS TABLE (
-    msg_id UUID,
-    content TEXT,
-    role VARCHAR(20),
-    created_at TIMESTAMPTZ,
-    similarity FLOAT
-) AS $$
-BEGIN
-    RETURN QUERY
-    SELECT 
-        m.msg_id,
-        m.content,
-        m.role,
-        m.created_at,
-        (1 - (m.embedding <=> query_embedding))::FLOAT AS similarity
-    FROM messages m
-    WHERE m.user_id = target_user_id
-      AND m.embedding IS NOT NULL
-      AND (1 - (m.embedding <=> query_embedding)) > 0.7  -- Only return matches with >70% similarity
-    ORDER BY m.embedding <=> query_embedding  -- <=> is cosine distance operator
-    LIMIT limit_count;
-END;
-$$ LANGUAGE plpgsql;
+-- SELECT msg_id, content, role, created_at,
+--        (1 - (embedding <=> $1::vector))::float AS similarity
+-- FROM messages
+-- WHERE user_id = $2::uuid
+--   AND embedding IS NOT NULL
+--   AND (1 - (embedding <=> $1::vector)) > 0.7
+-- ORDER BY embedding <=> $1::vector
+-- LIMIT 5;
 
 -- ============================================
 -- VERIFICATION QUERIES (for testing)

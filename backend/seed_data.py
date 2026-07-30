@@ -184,17 +184,7 @@ def seed_database(num_users: int = 10, conversations_per_user: int = 2):
         
         for key, value in contexts:
             try:
-                db_conn = db.get_connection()
-                with db_conn as conn:
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            """
-                            INSERT INTO user_context (user_id, context_key, context_value, confidence)
-                            VALUES (%s, %s, %s, %s)
-                            ON CONFLICT (user_id, context_key) DO NOTHING
-                            """,
-                            (user_id, key, value, 1.0)
-                        )
+                db.upsert_user_context(user_id, key, value, confidence=1.0)
             except Exception as e:
                 logger.error(f"Failed to store user context: {str(e)}")
     

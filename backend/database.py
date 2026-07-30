@@ -1,13 +1,15 @@
 """
 Database operations for Support Agent Memory
-Handles CockroachDB connections and vector search
+CockroachDB with pgvector distributed HNSW indexing
 """
 
 import logging
 import json
+import uuid
 import psycopg2
-from psycopg2.extras import RealDictCursor, execute_values
-from typing import List, Dict, Any, Optional, Tuple
+from psycopg2.extras import RealDictCursor
+from psycopg2.pool import SimpleConnectionPool
+from typing import List, Dict, Any, Optional
 from contextlib import contextmanager
 import time
 
@@ -16,64 +18,68 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 
+def normalize_user_id(user_id: str) -> str:
+    """
+    Normalize any user_id string to a valid UUID string.
+    If it's already a valid UUID, return it as-is.
+    Otherwise generate a deterministic UUID v5 from the string.
+    """
+    try:
+        return str(uuid.UUID(user_id))
+    except ValueError:
+        generated = str(uuid.uuid5(uuid.NAMESPACE_DNS, user_id))
+        logger.debug(f"Converted user_id '{user_id}' to UUID: {generated}")
+        return generated
+
+
 class DatabaseManager:
-    """Manages CockroachDB connections and operations"""
-    
+    """Manages CockroachDB connections with pooling and vector search operations"""
+
     def __init__(self):
         self.connection_string = settings.COCKROACHDB_URL
-        self._connection = None
-    
-    @contextmanager
-    def get_connection(self):
-        """Context manager for database connections"""
-        conn = None
-        try:
-            conn = psycopg2.connect(
-                self.connection_string,
+        self._pool: Optional[SimpleConnectionPool] = None
+
+    def _get_pool(self) -> SimpleConnectionPool:
+        """Lazy-initialize connection pool"""
+        if self._pool is None:
+            self._pool = SimpleConnectionPool(
+                minconn=1,
+                maxconn=settings.DB_POOL_SIZE,
+                dsn=self.connection_string,
                 cursor_factory=RealDictCursor
             )
+            logger.info("Database connection pool initialized")
+        return self._pool
+
+    @contextmanager
+    def get_connection(self):
+        """Context manager — borrows a connection from the pool and returns it after use"""
+        pool = self._get_pool()
+        conn = pool.getconn()
+        try:
             yield conn
             conn.commit()
         except Exception as e:
-            if conn:
-                conn.rollback()
+            conn.rollback()
             logger.error(f"Database error: {str(e)}", exc_info=True)
             raise
         finally:
-            if conn:
-                conn.close()
-    
+            pool.putconn(conn)
+
+    # ------------------------------------------------------------------
+    # User operations
+    # ------------------------------------------------------------------
+
     def get_or_create_user(self, user_id: str, email: str = None, name: str = None) -> Dict[str, Any]:
-        """Get existing user or create new one"""
-        import uuid
-        
+        uid = normalize_user_id(user_id)
         with self.get_connection() as conn:
             with conn.cursor() as cur:
-                # Check if user_id looks like a UUID
-                try:
-                    user_uuid = uuid.UUID(user_id)
-                    user_id_to_use = str(user_uuid)
-                except ValueError:
-                    # Not a UUID, generate one from the user_id string
-                    # Use UUID v5 (namespace-based) for consistency
-                    user_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, user_id)
-                    user_id_to_use = str(user_uuid)
-                    logger.info(f"Converted user_id '{user_id}' to UUID: {user_id_to_use}")
-                
-                # Try to get existing user
-                cur.execute(
-                    "SELECT * FROM users WHERE user_id = %s::uuid",
-                    (user_id_to_use,)
-                )
+                cur.execute("SELECT * FROM users WHERE user_id = %s::uuid", (uid,))
                 user = cur.fetchone()
-                
                 if user:
                     return dict(user)
-                
-                # Create new user
-                email = email or f"{user_id}@example.com"
-                name = name or f"User {user_id[:8]}"
-                
+                email = email or f"{uid}@example.com"
+                name = name or f"User {uid[:8]}"
                 cur.execute(
                     """
                     INSERT INTO users (user_id, email, name)
@@ -81,53 +87,44 @@ class DatabaseManager:
                     ON CONFLICT (email) DO UPDATE SET updated_at = now()
                     RETURNING *
                     """,
-                    (user_id_to_use, email, name)
+                    (uid, email, name)
                 )
                 user = cur.fetchone()
-                logger.info(f"Created new user: {user_id_to_use}")
+                logger.info(f"Created new user: {uid}")
                 return dict(user)
-    
-    def get_or_create_conversation(
-        self, 
-        user_id: str, 
-        conv_id: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """Get existing conversation or create new one"""
-        import uuid
-        
-        # Normalize user_id to UUID
-        try:
-            user_uuid = uuid.UUID(user_id)
-            user_id_to_use = str(user_uuid)
-        except ValueError:
-            user_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, user_id)
-            user_id_to_use = str(user_uuid)
-        
+
+    # ------------------------------------------------------------------
+    # Conversation operations
+    # ------------------------------------------------------------------
+
+    def get_or_create_conversation(self, user_id: str, conv_id: Optional[str] = None) -> Dict[str, Any]:
+        uid = normalize_user_id(user_id)
         with self.get_connection() as conn:
             with conn.cursor() as cur:
                 if conv_id:
-                    # Try to get existing conversation
                     cur.execute(
                         "SELECT * FROM conversations WHERE conv_id = %s::uuid AND user_id = %s::uuid",
-                        (conv_id, user_id_to_use)
+                        (conv_id, uid)
                     )
                     conv = cur.fetchone()
                     if conv:
                         return dict(conv)
-                
-                # Create new conversation
                 cur.execute(
                     """
                     INSERT INTO conversations (user_id, title, status)
                     VALUES (%s::uuid, %s, %s)
                     RETURNING *
                     """,
-                    (user_id_to_use, "New conversation", "active")
+                    (uid, "New conversation", "active")
                 )
                 conv = cur.fetchone()
                 logger.info(f"Created new conversation: {conv['conv_id']}")
                 return dict(conv)
-    
+
+    # ------------------------------------------------------------------
+    # Message operations
+    # ------------------------------------------------------------------
+
     def store_message(
         self,
         conv_id: str,
@@ -137,104 +134,25 @@ class DatabaseManager:
         embedding: Optional[List[float]] = None,
         metadata: Optional[Dict] = None
     ) -> str:
-        """Store a message in the database"""
-        import uuid
-        
-        # Normalize user_id to UUID
-        try:
-            user_uuid = uuid.UUID(user_id)
-            user_id_to_use = str(user_uuid)
-        except ValueError:
-            user_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, user_id)
-            user_id_to_use = str(user_uuid)
-        
+        uid = normalize_user_id(user_id)
+        embedding_str = f"[{','.join(map(str, embedding))}]" if embedding else None
+        metadata_str = json.dumps(metadata or {})
+
         with self.get_connection() as conn:
             with conn.cursor() as cur:
-                # Convert embedding to pgvector format
-                embedding_str = None
-                if embedding:
-                    embedding_str = f"[{','.join(map(str, embedding))}]"
-                
-                # Convert metadata dict to JSON string - psycopg2 needs string for JSONB cast
-                metadata_str = json.dumps(metadata if metadata is not None else {})
-                
                 cur.execute(
                     """
                     INSERT INTO messages (conv_id, user_id, role, content, embedding, metadata)
                     VALUES (%s::uuid, %s::uuid, %s, %s, %s::vector, %s::jsonb)
                     RETURNING msg_id
                     """,
-                    (conv_id, user_id_to_use, role, content, embedding_str, metadata_str)
+                    (conv_id, uid, role, content, embedding_str, metadata_str)
                 )
                 msg_id = cur.fetchone()['msg_id']
                 logger.info(f"Stored message: {msg_id} (role: {role})")
                 return str(msg_id)
-    
-    def search_similar_messages(
-        self,
-        user_id: str,
-        query_embedding: List[float],
-        limit: int = 5,
-        similarity_threshold: float = 0.7
-    ) -> List[Dict[str, Any]]:
-        """
-        Search for similar messages using vector similarity
-        Uses CockroachDB's HNSW index for fast semantic search
-        """
-        import uuid
-        
-        # Normalize user_id to UUID
-        try:
-            user_uuid = uuid.UUID(user_id)
-            user_id_to_use = str(user_uuid)
-        except ValueError:
-            user_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, user_id)
-            user_id_to_use = str(user_uuid)
-        
-        start_time = time.time()
-        
-        with self.get_connection() as conn:
-            with conn.cursor() as cur:
-                # Convert embedding to pgvector format
-                embedding_str = f"[{','.join(map(str, query_embedding))}]"
-                
-                # Vector similarity search with cosine distance
-                # <=> is the cosine distance operator in pgvector
-                # (1 - distance) gives similarity score
-                cur.execute(
-                    """
-                    SELECT 
-                        msg_id,
-                        content,
-                        role,
-                        created_at,
-                        (1 - (embedding <=> %s::vector))::float AS similarity
-                    FROM messages
-                    WHERE user_id = %s::uuid
-                      AND embedding IS NOT NULL
-                      AND (1 - (embedding <=> %s::vector)) > %s
-                    ORDER BY embedding <=> %s::vector
-                    LIMIT %s
-                    """,
-                    (embedding_str, user_id_to_use, embedding_str, similarity_threshold, embedding_str, limit)
-                )
-                
-                results = cur.fetchall()
-                
-                retrieval_time = int((time.time() - start_time) * 1000)
-                logger.info(
-                    f"Vector search found {len(results)} similar messages "
-                    f"in {retrieval_time}ms for user {user_id}"
-                )
-                
-                return [dict(row) for row in results]
-    
-    def get_recent_messages(
-        self,
-        conv_id: str,
-        limit: int = 3
-    ) -> List[Dict[str, Any]]:
-        """Get most recent messages from a conversation"""
+
+    def get_recent_messages(self, conv_id: str, limit: int = 3) -> List[Dict[str, Any]]:
         with self.get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -248,21 +166,55 @@ class DatabaseManager:
                     (conv_id, limit)
                 )
                 results = cur.fetchall()
-                # Reverse to chronological order
                 return [dict(row) for row in reversed(results)]
-    
+
+    # ------------------------------------------------------------------
+    # Vector search
+    # ------------------------------------------------------------------
+
+    def search_similar_messages(
+        self,
+        user_id: str,
+        query_embedding: List[float],
+        limit: int = 5,
+        similarity_threshold: float = 0.7
+    ) -> List[Dict[str, Any]]:
+        """Semantic search using CockroachDB distributed HNSW vector index"""
+        uid = normalize_user_id(user_id)
+        embedding_str = f"[{','.join(map(str, query_embedding))}]"
+        start = time.time()
+
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        msg_id,
+                        content,
+                        role,
+                        created_at,
+                        (1 - (embedding <=> %s::vector))::float AS similarity
+                    FROM messages
+                    WHERE user_id = %s::uuid
+                      AND embedding IS NOT NULL
+                      AND (1 - (embedding <=> %s::vector)) > %s
+                    ORDER BY embedding <=> %s::vector
+                    LIMIT %s
+                    """,
+                    (embedding_str, uid, embedding_str, similarity_threshold, embedding_str, limit)
+                )
+                results = cur.fetchall()
+
+        elapsed = int((time.time() - start) * 1000)
+        logger.info(f"Vector search found {len(results)} messages in {elapsed}ms for user {user_id}")
+        return [dict(row) for row in results]
+
+    # ------------------------------------------------------------------
+    # User context
+    # ------------------------------------------------------------------
+
     def get_user_context(self, user_id: str) -> Dict[str, Any]:
-        """Get consolidated context about a user"""
-        import uuid
-        
-        # Normalize user_id to UUID
-        try:
-            user_uuid = uuid.UUID(user_id)
-            user_id_to_use = str(user_uuid)
-        except ValueError:
-            user_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, user_id)
-            user_id_to_use = str(user_uuid)
-        
+        uid = normalize_user_id(user_id)
         with self.get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -272,21 +224,40 @@ class DatabaseManager:
                     WHERE user_id = %s::uuid
                     ORDER BY confidence DESC
                     """,
-                    (user_id_to_use,)
+                    (uid,)
                 )
-                results = cur.fetchall()
-                
-                # Convert to dict
-                context = {}
-                for row in results:
-                    context[row['context_key']] = {
+                return {
+                    row['context_key']: {
                         'value': row['context_value'],
                         'confidence': float(row['confidence']),
                         'updated_at': row['updated_at'].isoformat()
                     }
-                
-                return context
-    
+                    for row in cur.fetchall()
+                }
+
+    def upsert_user_context(self, user_id: str, key: str, value: str, confidence: float = 1.0):
+        """Insert or update a structured user fact"""
+        uid = normalize_user_id(user_id)
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO user_context (user_id, context_key, context_value, confidence)
+                    VALUES (%s::uuid, %s, %s, %s)
+                    ON CONFLICT (user_id, context_key)
+                    DO UPDATE SET
+                        context_value = EXCLUDED.context_value,
+                        confidence = EXCLUDED.confidence,
+                        updated_at = now()
+                    """,
+                    (uid, key, value, confidence)
+                )
+                logger.info(f"Upserted user context: {key}={value} for {uid}")
+
+    # ------------------------------------------------------------------
+    # Audit log
+    # ------------------------------------------------------------------
+
     def log_memory_retrieval(
         self,
         user_id: str,
@@ -297,67 +268,27 @@ class DatabaseManager:
         response_text: str,
         retrieval_time_ms: int
     ):
-        """Log memory retrieval for audit and observability"""
-        import uuid
-        
-        # Normalize user_id to UUID
-        try:
-            user_uuid = uuid.UUID(user_id)
-            user_id_to_use = str(user_uuid)
-        except ValueError:
-            user_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, user_id)
-            user_id_to_use = str(user_uuid)
-        
+        uid = normalize_user_id(user_id)
+        embedding_str = f"[{','.join(map(str, query_embedding))}]"
         with self.get_connection() as conn:
             with conn.cursor() as cur:
-                embedding_str = f"[{','.join(map(str, query_embedding))}]"
-                
                 cur.execute(
                     """
                     INSERT INTO memory_audit (
-                        user_id, query_embedding, retrieved_msg_ids, 
+                        user_id, query_embedding, retrieved_msg_ids,
                         retrieval_scores, query_text, response_text, retrieval_time_ms
                     )
                     VALUES (%s::uuid, %s::vector, %s, %s, %s, %s, %s)
                     """,
-                    (
-                        user_id_to_use,
-                        embedding_str,
-                        retrieved_msg_ids,
-                        retrieval_scores,
-                        query_text,
-                        response_text,
-                        retrieval_time_ms
-                    )
+                    (uid, embedding_str, retrieved_msg_ids, retrieval_scores,
+                     query_text, response_text, retrieval_time_ms)
                 )
-                logger.debug(f"Logged memory retrieval for user {user_id}")
-    
-    def upsert_user_context(self, user_id: str, key: str, value: str, confidence: float = 1.0):
-        """Insert or update a user context fact"""
-        import uuid
-        try:
-            user_uuid = uuid.UUID(user_id)
-            user_id_to_use = str(user_uuid)
-        except ValueError:
-            user_id_to_use = str(uuid.uuid5(uuid.NAMESPACE_DNS, user_id))
 
-        with self.get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO user_context (user_id, context_key, context_value, confidence)
-                    VALUES (%s::uuid, %s, %s, %s)
-                    ON CONFLICT (user_id, context_key)
-                    DO UPDATE SET context_value = EXCLUDED.context_value,
-                                  confidence = EXCLUDED.confidence,
-                                  updated_at = now()
-                    """,
-                    (user_id_to_use, key, value, confidence)
-                )
-                logger.info(f"Upserted user context: {key}={value} for {user_id_to_use}")
+    # ------------------------------------------------------------------
+    # Health check
+    # ------------------------------------------------------------------
 
     def health_check(self) -> bool:
-        """Check if database is accessible"""
         try:
             with self.get_connection() as conn:
                 with conn.cursor() as cur:
@@ -368,12 +299,11 @@ class DatabaseManager:
             return False
 
 
-# Singleton instance
+# Singleton
 _db_manager: Optional[DatabaseManager] = None
 
 
 def get_db_manager() -> DatabaseManager:
-    """Get or create database manager singleton"""
     global _db_manager
     if _db_manager is None:
         _db_manager = DatabaseManager()

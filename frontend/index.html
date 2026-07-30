@@ -280,7 +280,23 @@
     <script>
         // Configuration
         const API_URL = 'https://qmikeyw5qzk6bg3cw5tndq6vgq0yzuvl.lambda-url.us-east-1.on.aws';
-        const USER_ID = 'c6a54245-1d39-55fd-8263-9f0c510ddc0a'; // Use seeded user ID
+
+        // Generate a unique user ID per browser (persisted in localStorage)
+        // Each visitor gets their own isolated memory space
+        function getOrCreateUserId() {
+            const key = 'support_agent_user_id';
+            let userId = localStorage.getItem(key);
+            if (!userId) {
+                userId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+                    const r = Math.random() * 16 | 0;
+                    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+                });
+                localStorage.setItem(key, userId);
+            }
+            return userId;
+        }
+
+        const USER_ID = getOrCreateUserId();
 
         // Deployed to AWS Lambda - Live Production URL
         console.log('🚀 Frontend loaded - Version 2.0 with loading fix');
