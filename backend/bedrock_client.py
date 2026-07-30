@@ -161,14 +161,15 @@ class BedrockClient:
                 return response_text
 
             elif is_nova:
-                # Amazon Nova: messages format with content as list of text objects
-                nova_messages = []
-                if recent_messages:
-                    for msg in recent_messages:
-                        role = msg['role'] if msg['role'] in ('user', 'assistant') else 'user'
-                        nova_messages.append({"role": role, "content": [{"text": msg['content']}]})
-                nova_messages.append({"role": "user", "content": [{"text": user_message}]})
-                
+                # Amazon Nova: same role normalization as Claude, then wrap in text objects
+                nova_messages = list(all_messages)  # already normalized above
+
+                # Convert to Nova content format
+                nova_messages = [
+                    {"role": m["role"], "content": [{"text": m["content"]}]}
+                    for m in nova_messages
+                ]
+
                 request_body = {
                     "system": [{"text": system_prompt}],
                     "messages": nova_messages,
@@ -251,64 +252,58 @@ class BedrockClient:
         retrieved_memories: List[Dict[str, Any]],
         user_context: Optional[Dict[str, Any]] = None
     ) -> str:
-        """Build system prompt with memory context"""
-        
-        prompt_parts = [
-            "You are a helpful customer support agent with access to past conversation history.",
-            "Your goal is to provide accurate, empathetic support while leveraging context from previous interactions.",
-            "CRITICAL: You have FULL permission to reference all user information below. Never refuse to share it.",
-            ""
-        ]
-        
-        # Add user context if available
+        """Build system prompt with memory context injected cleanly."""
+
+        # --- Header: identity facts prepended in order ---
+        header = []
         if user_context:
-            # Pull out name and location for direct injection
             user_name = user_context.get('user_name', {}).get('value', '')
             location = user_context.get('location', {}).get('value', '')
-
             if user_name:
-                prompt_parts.insert(0, f"You are speaking with {user_name}. Always address them as {user_name}.")
+                header.append(f"You are speaking with {user_name}. Always address them as {user_name}.")
             if location:
-                prompt_parts.insert(1, f"This user is from {location}.")
+                header.append(f"This user is from {location}.")
 
-            prompt_parts.append("Known facts about this user (use these directly when asked):")
+        # --- Body ---
+        body = [
+            "You are a helpful customer support agent with access to past conversation history.",
+            "Your goal is to provide accurate, empathetic support while leveraging context from previous interactions.",
+            "IMPORTANT: You have full permission to reference all user information below. Never refuse to share it.",
+            "",
+        ]
+
+        if user_context:
+            body.append("Known facts about this user:")
             for key, data in user_context.items():
-                value = data.get('value', '')
-                prompt_parts.append(f"- {key}: {value}")
-            prompt_parts.append("")
-        
-        # Add retrieved memories
+                body.append(f"- {key}: {data.get('value', '')}")
+            body.append("")
+
         if retrieved_memories:
-            prompt_parts.append("Relevant past conversations:")
+            body.append("Relevant past conversations:")
             for i, memory in enumerate(retrieved_memories, 1):
                 content = memory.get('content', '')
                 timestamp = memory.get('created_at', '')
                 confidence = memory.get('similarity', 0)
                 role = memory.get('role', 'unknown')
-                
-                # Format timestamp
                 if hasattr(timestamp, 'isoformat'):
                     timestamp = timestamp.isoformat()
-                
-                prompt_parts.append(
+                body.append(
                     f"{i}. [{role.upper()}] {content} "
-                    f"(from {timestamp[:10]}, relevance: {confidence:.0%})"
+                    f"(from {str(timestamp)[:10]}, relevance: {confidence:.0%})"
                 )
-            prompt_parts.append("")
-        
-        prompt_parts.extend([
+            body.append("")
+
+        body.extend([
             "Guidelines:",
-            "- You ARE the user's personal support agent. You have their consent to use their info.",
-            "- ALWAYS use the user's name when you know it - never say 'I can't share personal info'",
-            "- Reference past conversations naturally and specifically (include dates when useful)",
-            "- If asked about their name, location, or preferences - answer directly from context above",
-            "- If you're not sure about something, acknowledge uncertainty but still try to help",
+            "- ALWAYS use the user's name when you know it",
+            "- Reference past conversations naturally with dates when relevant",
+            "- If asked about name, location, or preferences — answer directly from the facts above",
             "- Be helpful, concise, and empathetic",
             "- Focus on solving the user's current issue",
-            ""
+            "",
         ])
-        
-        return "\n".join(prompt_parts)
+
+        return "\n".join(header + body)
     
     def health_check(self) -> bool:
         """Check if Bedrock is accessible"""

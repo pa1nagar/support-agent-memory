@@ -8,7 +8,7 @@ import json
 import uuid
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from psycopg2.pool import SimpleConnectionPool
+from psycopg2.pool import ThreadedConnectionPool
 from typing import List, Dict, Any, Optional
 from contextlib import contextmanager
 import time
@@ -39,17 +39,24 @@ class DatabaseManager:
         self.connection_string = settings.COCKROACHDB_URL
         self._pool: Optional[SimpleConnectionPool] = None
 
-    def _get_pool(self) -> SimpleConnectionPool:
-        """Lazy-initialize connection pool"""
+    def _get_pool(self) -> ThreadedConnectionPool:
+        """Lazy-initialize thread-safe connection pool"""
         if self._pool is None:
-            self._pool = SimpleConnectionPool(
+            self._pool = ThreadedConnectionPool(
                 minconn=1,
-                maxconn=settings.DB_POOL_SIZE,
+                maxconn=min(settings.DB_POOL_SIZE, 3),  # Keep small for Lambda containers
                 dsn=self.connection_string,
                 cursor_factory=RealDictCursor
             )
-            logger.info("Database connection pool initialized")
+            logger.info("Database connection pool initialized (ThreadedConnectionPool)")
         return self._pool
+
+    def close(self):
+        """Close all pool connections — call on Lambda shutdown if needed"""
+        if self._pool is not None:
+            self._pool.closeall()
+            self._pool = None
+            logger.info("Database connection pool closed")
 
     @contextmanager
     def get_connection(self):
@@ -132,7 +139,8 @@ class DatabaseManager:
         role: str,
         content: str,
         embedding: Optional[List[float]] = None,
-        metadata: Optional[Dict] = None
+        metadata: Optional[Dict] = None,
+        created_at=None  # Optional timestamp override for seeding historical data
     ) -> str:
         uid = normalize_user_id(user_id)
         embedding_str = f"[{','.join(map(str, embedding))}]" if embedding else None
@@ -140,14 +148,24 @@ class DatabaseManager:
 
         with self.get_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO messages (conv_id, user_id, role, content, embedding, metadata)
-                    VALUES (%s::uuid, %s::uuid, %s, %s, %s::vector, %s::jsonb)
-                    RETURNING msg_id
-                    """,
-                    (conv_id, uid, role, content, embedding_str, metadata_str)
-                )
+                if created_at:
+                    cur.execute(
+                        """
+                        INSERT INTO messages (conv_id, user_id, role, content, embedding, metadata, created_at)
+                        VALUES (%s::uuid, %s::uuid, %s, %s, %s::vector, %s::jsonb, %s)
+                        RETURNING msg_id
+                        """,
+                        (conv_id, uid, role, content, embedding_str, metadata_str, created_at)
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO messages (conv_id, user_id, role, content, embedding, metadata)
+                        VALUES (%s::uuid, %s::uuid, %s, %s, %s::vector, %s::jsonb)
+                        RETURNING msg_id
+                        """,
+                        (conv_id, uid, role, content, embedding_str, metadata_str)
+                    )
                 msg_id = cur.fetchone()['msg_id']
                 logger.info(f"Stored message: {msg_id} (role: {role})")
                 return str(msg_id)

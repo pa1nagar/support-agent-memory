@@ -439,6 +439,15 @@
             }
         }
 
+        function escapeHtml(str) {
+            return str
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#x27;');
+        }
+
         function updateMemoryPanel(memories) {
             const memoryList = document.getElementById('memoryList');
             
@@ -451,13 +460,14 @@
                 const confidence = Math.round(memory.confidence * 100);
                 const confidenceColor = confidence >= 90 ? '#10b981' : confidence >= 70 ? '#f59e0b' : '#ef4444';
                 const date = new Date(memory.timestamp).toLocaleString();
+                const safeContent = escapeHtml(memory.content);
                 
                 return `
                     <div class="memory-item">
                         <span class="memory-confidence" style="background: ${confidenceColor}">
                             ${confidence}% confident
                         </span>
-                        <div class="memory-content">${memory.content}</div>
+                        <div class="memory-content">${safeContent}</div>
                         <div class="memory-time">📅 ${date}</div>
                     </div>
                 `;

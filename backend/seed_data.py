@@ -147,25 +147,27 @@ def seed_database(num_users: int = 10, conversations_per_user: int = 2):
                 msg_time = base_time + timedelta(minutes=msg_idx * 3)
                 
                 try:
-                    # Store user message with embedding
+                    # Store user message with embedding and historical timestamp
                     user_embedding = bedrock.generate_embedding(user_msg)
                     db.store_message(
                         conv_id=conv_id,
                         user_id=user_id,
                         role="user",
                         content=user_msg,
-                        embedding=user_embedding
+                        embedding=user_embedding,
+                        created_at=msg_time
                     )
                     total_messages += 1
                     
-                    # Store agent response with embedding
+                    # Store agent response with embedding and historical timestamp
                     agent_embedding = bedrock.generate_embedding(agent_msg)
                     db.store_message(
                         conv_id=conv_id,
                         user_id=user_id,
                         role="assistant",
                         content=agent_msg,
-                        embedding=agent_embedding
+                        embedding=agent_embedding,
+                        created_at=msg_time + timedelta(seconds=30)
                     )
                     total_messages += 1
                     

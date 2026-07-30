@@ -85,28 +85,25 @@ class HealthResponse(BaseModel):
 # ============================================
 
 def retrieve_memories(user_id: str, query_embedding: List[float]) -> tuple[List[MemoryItem], int]:
-    """Vector search in CockroachDB using HNSW index. Returns (memories, retrieval_ms)."""
-    try:
-        db = get_db_manager()
-        similar = db.search_similar_messages(
-            user_id=user_id,
-            query_embedding=query_embedding,
-            limit=settings.MEMORY_RETRIEVAL_LIMIT,
-            similarity_threshold=settings.MEMORY_SIMILARITY_THRESHOLD
+    """Vector search in CockroachDB using HNSW index. Returns (memories, retrieval_ms).
+    Raises on hard failures so callers can surface the issue rather than silently degrading."""
+    db = get_db_manager()
+    similar = db.search_similar_messages(
+        user_id=user_id,
+        query_embedding=query_embedding,
+        limit=settings.MEMORY_RETRIEVAL_LIMIT,
+        similarity_threshold=settings.MEMORY_SIMILARITY_THRESHOLD
+    )
+    memories = [
+        MemoryItem(
+            msg_id=str(m['msg_id']),
+            content=m['content'],
+            timestamp=m['created_at'].isoformat() if hasattr(m['created_at'], 'isoformat') else str(m['created_at']),
+            confidence=float(m['similarity'])
         )
-        memories = [
-            MemoryItem(
-                msg_id=str(m['msg_id']),
-                content=m['content'],
-                timestamp=m['created_at'].isoformat() if hasattr(m['created_at'], 'isoformat') else str(m['created_at']),
-                confidence=float(m['similarity'])
-            )
-            for m in similar
-        ]
-        return memories, 0
-    except Exception as e:
-        logger.error(f"Memory retrieval failed: {e}", exc_info=True)
-        return [], 0
+        for m in similar
+    ]
+    return memories, 0
 
 
 def generate_response(
@@ -244,8 +241,14 @@ async def chat(request: ChatRequest):
         query_embedding = bedrock.generate_embedding(request.message)
 
         # Retrieve memories using the embedding
-        memories, retrieval_ms = retrieve_memories(request.user_id, query_embedding)
-        logger.info(f"Retrieved {len(memories)} memories")
+        memory_warning = None
+        try:
+            memories, retrieval_ms = retrieve_memories(request.user_id, query_embedding)
+            logger.info(f"Retrieved {len(memories)} memories")
+        except Exception as e:
+            logger.error(f"Memory retrieval failed: {e}", exc_info=True)
+            memories, retrieval_ms = [], 0
+            memory_warning = "Memory retrieval unavailable — responding without history context"
 
         # Extract and persist user facts from this message
         try:
@@ -314,9 +317,9 @@ async def memory_debug(
     Debug endpoint — inspect memory for a given user.
     Protected by a simple token check (set DEBUG_TOKEN env var).
     """
-    # Basic auth: require token if DEBUG_TOKEN is set in environment
+    # Auth: endpoint is blocked unless DEBUG_TOKEN env var is set AND token matches
     debug_token = os.environ.get("DEBUG_TOKEN", "")
-    if debug_token and token != debug_token:
+    if not debug_token or token != debug_token:
         raise HTTPException(status_code=403, detail="Forbidden")
 
     # Validate user_id length
