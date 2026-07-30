@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     # AWS Bedrock
     AWS_REGION: str = Field(default="us-east-1", env="AWS_REGION")
     BEDROCK_MODEL_ID: str = Field(
-        default="anthropic.claude-3-5-sonnet-20240620-v1:0",  # Claude 3.5 Sonnet (stable)
+        default="amazon.titan-text-premier-v1:0",  # Amazon Titan Text Premier (immediately available)
         env="BEDROCK_MODEL_ID"
     )
     BEDROCK_EMBEDDING_MODEL_ID: str = Field(

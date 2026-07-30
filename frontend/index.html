@@ -58,8 +58,12 @@
         .messages {
             flex: 1;
             overflow-y: auto;
+            overflow-x: hidden;
             padding: 30px;
             background: #f9fafb;
+            height: 100%;
+            max-height: calc(100vh - 200px);
+            scroll-behavior: smooth;
         }
 
         .message {
@@ -279,6 +283,7 @@
         const USER_ID = 'c6a54245-1d39-55fd-8263-9f0c510ddc0a'; // Use seeded user ID
 
         // Deployed to AWS Lambda - Live Production URL
+        console.log('🚀 Frontend loaded - Version 2.0 with loading fix');
 
         let conversationId = null;
 
@@ -289,6 +294,8 @@
                 sendMessage();
             }
         });
+
+        let messageCounter = 0;
 
         async function sendMessage() {
             const input = document.getElementById('messageInput');
@@ -304,8 +311,10 @@
             addMessage(message, 'user');
             input.value = '';
 
-            // Show loading indicator
+            // Show loading indicator with unique ID
+            messageCounter++;
             const loadingId = addMessage('', 'assistant', true);
+            console.log('Created loading message with ID:', loadingId);
 
             try {
                 // Call API
@@ -321,17 +330,24 @@
                     })
                 });
 
+                console.log('Response status:', response.status);
+
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                 }
 
                 const data = await response.json();
+                console.log('Response data:', data);
                 
                 // Update conversation ID
                 conversationId = data.conversation_id;
 
-                // Remove loading indicator
+                // Remove loading indicator - CRITICAL
+                console.log('Removing loading message:', loadingId);
                 removeMessage(loadingId);
+
+                // Small delay to ensure removal completes
+                await new Promise(resolve => setTimeout(resolve, 50));
 
                 // Add assistant response
                 addMessage(data.response, 'assistant');
@@ -342,7 +358,10 @@
             } catch (error) {
                 console.error('Error:', error);
                 console.error('Error details:', error.message);
+                
+                // Remove loading indicator on error too
                 removeMessage(loadingId);
+                
                 addMessage(`❌ Error: ${error.message || 'Something went wrong'}. Check console for details.`, 'assistant');
             } finally {
                 // Re-enable input
@@ -354,7 +373,8 @@
 
         function addMessage(content, role, isLoading = false) {
             const messagesDiv = document.getElementById('messages');
-            const messageId = 'msg-' + Date.now();
+            const messageId = 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+            console.log('Creating message:', messageId, 'role:', role, 'isLoading:', isLoading);
             
             const messageDiv = document.createElement('div');
             messageDiv.id = messageId;
@@ -380,15 +400,26 @@
             
             messageDiv.appendChild(bubbleDiv);
             messagesDiv.appendChild(messageDiv);
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            
+            // Smooth scroll to bottom
+            setTimeout(() => {
+                messagesDiv.scrollTo({
+                    top: messagesDiv.scrollHeight,
+                    behavior: 'smooth'
+                });
+            }, 100);
             
             return messageId;
         }
 
         function removeMessage(messageId) {
+            console.log('Attempting to remove message:', messageId);
             const messageDiv = document.getElementById(messageId);
             if (messageDiv) {
+                console.log('Message found, removing:', messageDiv);
                 messageDiv.remove();
+            } else {
+                console.warn('Message not found:', messageId);
             }
         }
 

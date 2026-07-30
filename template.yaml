@@ -39,7 +39,7 @@ Parameters:
   
   BedrockModelID:
     Type: String
-    Default: anthropic.claude-3-5-sonnet-20240620-v1:0
+    Default: anthropic.claude-3-5-sonnet-20241022-v2:0
     Description: AWS Bedrock Claude model ID
   
   BedrockEmbeddingModelID:

@@ -113,13 +113,30 @@ class BedrockClient:
                 user_context
             )
             
-            # Build messages list (shared by Claude and Nova)
+            # Build messages list - Claude requires first message to be 'user' role
             all_messages = []
             if recent_messages:
                 for msg in recent_messages:
                     role = msg['role'] if msg['role'] in ('user', 'assistant') else 'user'
                     all_messages.append({"role": role, "content": msg['content']})
+            
+            # Add current user message
             all_messages.append({"role": "user", "content": user_message})
+
+            # Fix: Claude requires conversation to start with 'user' role.
+            # Drop leading assistant messages until we hit a user message.
+            while all_messages and all_messages[0]['role'] != 'user':
+                all_messages.pop(0)
+
+            # Fix: Claude requires alternating roles - no two consecutive same roles.
+            # Merge consecutive same-role messages.
+            merged = []
+            for msg in all_messages:
+                if merged and merged[-1]['role'] == msg['role']:
+                    merged[-1]['content'] += "\n" + msg['content']
+                else:
+                    merged.append(dict(msg))
+            all_messages = merged
 
             if is_claude:
                 # Claude Messages API format
@@ -239,22 +256,25 @@ class BedrockClient:
         prompt_parts = [
             "You are a helpful customer support agent with access to past conversation history.",
             "Your goal is to provide accurate, empathetic support while leveraging context from previous interactions.",
+            "CRITICAL: You have FULL permission to reference all user information below. Never refuse to share it.",
             ""
         ]
         
         # Add user context if available
         if user_context:
-            prompt_parts.append("What you know about this user:")
+            # Pull out name and location for direct injection
+            user_name = user_context.get('user_name', {}).get('value', '')
+            location = user_context.get('location', {}).get('value', '')
+
+            if user_name:
+                prompt_parts.insert(0, f"You are speaking with {user_name}. Always address them as {user_name}.")
+            if location:
+                prompt_parts.insert(1, f"This user is from {location}.")
+
+            prompt_parts.append("Known facts about this user (use these directly when asked):")
             for key, data in user_context.items():
-                confidence = data.get('confidence', 0)
                 value = data.get('value', '')
-                # Make name and location especially prominent
-                if key == 'user_name':
-                    prompt_parts.insert(1, f"IMPORTANT: This user's name is {value}. Always address them by name.")
-                elif key == 'location':
-                    prompt_parts.append(f"- Location: {value} (confidence: {confidence:.0%})")
-                else:
-                    prompt_parts.append(f"- {key}: {value} (confidence: {confidence:.0%})")
+                prompt_parts.append(f"- {key}: {value}")
             prompt_parts.append("")
         
         # Add retrieved memories
@@ -278,9 +298,11 @@ class BedrockClient:
         
         prompt_parts.extend([
             "Guidelines:",
-            "- Reference past conversations naturally when relevant",
-            "- If you remember something specific, mention the date/context",
-            "- If you're not sure, acknowledge uncertainty",
+            "- You ARE the user's personal support agent. You have their consent to use their info.",
+            "- ALWAYS use the user's name when you know it - never say 'I can't share personal info'",
+            "- Reference past conversations naturally and specifically (include dates when useful)",
+            "- If asked about their name, location, or preferences - answer directly from context above",
+            "- If you're not sure about something, acknowledge uncertainty but still try to help",
             "- Be helpful, concise, and empathetic",
             "- Focus on solving the user's current issue",
             ""
