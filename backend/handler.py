@@ -37,14 +37,14 @@ app = FastAPI(
     description="AI Support Agent with Persistent Memory - CockroachDB × AWS Hackathon"
 )
 
-# CORS Middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.get_cors_origins_list(),
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS Middleware - DISABLED (Lambda Function URL handles CORS)
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=settings.get_cors_origins_list(),
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
 
 # ============================================
 # Serve Static Frontend Files

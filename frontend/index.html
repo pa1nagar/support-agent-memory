@@ -341,8 +341,9 @@
 
             } catch (error) {
                 console.error('Error:', error);
+                console.error('Error details:', error.message);
                 removeMessage(loadingId);
-                addMessage('❌ Sorry, something went wrong. Please try again.', 'assistant');
+                addMessage(`❌ Error: ${error.message || 'Something went wrong'}. Check console for details.`, 'assistant');
             } finally {
                 // Re-enable input
                 input.disabled = false;

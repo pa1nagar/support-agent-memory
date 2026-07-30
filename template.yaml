@@ -37,6 +37,16 @@ Parameters:
     Description: CockroachDB connection URL (from Cloud Console)
     NoEcho: true
   
+  BedrockModelID:
+    Type: String
+    Default: anthropic.claude-3-5-sonnet-20240620-v1:0
+    Description: AWS Bedrock Claude model ID
+  
+  BedrockEmbeddingModelID:
+    Type: String
+    Default: amazon.titan-embed-text-v2:0
+    Description: AWS Bedrock Titan embedding model ID
+  
   MemoryRetrievalLimit:
     Type: Number
     Default: 5
@@ -67,6 +77,8 @@ Resources:
       Environment:
         Variables:
           COCKROACHDB_URL: !Ref CockroachDBURL
+          BEDROCK_MODEL_ID: !Ref BedrockModelID
+          BEDROCK_EMBEDDING_MODEL_ID: !Ref BedrockEmbeddingModelID
           MEMORY_RETRIEVAL_LIMIT: !Ref MemoryRetrievalLimit
           MEMORY_SIMILARITY_THRESHOLD: !Ref MemorySimilarityThreshold
       Policies:

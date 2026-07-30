@@ -12,7 +12,7 @@ region = "us-east-1"
 confirm_changeset = true
 capabilities = "CAPABILITY_IAM"
 resolve_s3 = true
-parameter_overrides = "Environment=\"production\" CockroachDBURL=\"postgresql://pawan:Fr9D7U2-wmqCPZ5A6vbpcg@nordic-saiga-30292.j77.aws-us-east-1.cockroachlabs.cloud:26257/defaultdb?sslmode=require\" MemoryRetrievalLimit=\"5\" MemorySimilarityThreshold=\"0.7\""
+parameter_overrides = "Environment=\"production\" CockroachDBURL=\"postgresql://pawan:Fr9D7U2-wmqCPZ5A6vbpcg@nordic-saiga-30292.j77.aws-us-east-1.cockroachlabs.cloud:26257/defaultdb?sslmode=require\" BedrockModelID=\"anthropic.claude-3-5-sonnet-20240620-v1:0\" BedrockEmbeddingModelID=\"amazon.titan-embed-text-v2:0\" MemoryRetrievalLimit=\"5\" MemorySimilarityThreshold=\"0.7\""
 image_repositories = []
 
 [default.build]
