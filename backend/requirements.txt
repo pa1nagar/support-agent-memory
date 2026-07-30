@@ -18,7 +18,8 @@ psycopg2-binary==2.9.9  # PostgreSQL driver (CockroachDB compatible)
 # Note: psycopg2-binary works, but psycopg[binary] is modern alternative
 
 # Vector support
-pgvector==0.2.4  # For handling VECTOR types in Python
+# pgvector==0.2.4  # Temporarily commented - causes numpy dependency issues on Windows
+# We'll handle vectors as lists directly
 
 # HTTP Client
 httpx==0.26.0  # For async HTTP requests

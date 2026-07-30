@@ -1,0 +1,24 @@
+# SAM Configuration File
+# This file contains the default parameters for sam deploy
+
+version = 0.1
+
+[default]
+[default.deploy]
+[default.deploy.parameters]
+stack_name = "support-agent-memory"
+s3_prefix = "support-agent-memory"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+parameter_overrides = "Environment=\"production\" CockroachDBURL=\"postgresql://pawan:Fr9D7U2-wmqCPZ5A6vbpcg@nordic-saiga-30292.j77.aws-us-east-1.cockroachlabs.cloud:26257/defaultdb?sslmode=require\" MemoryRetrievalLimit=\"5\" MemorySimilarityThreshold=\"0.7\""
+image_repositories = []
+
+[default.build]
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.global.parameters]
+region = "us-east-1"
