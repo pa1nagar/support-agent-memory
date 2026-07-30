@@ -26,6 +26,49 @@ env/
 ENV/
 .venv
 
+# SAM build artifacts
+.aws-sam/
+backend/package/
+function.zip
+backend/function.zip
+
+# Installed packages in backend (SAM handles these)
+backend/annotated_types*/
+backend/anyio*/
+backend/bin/
+backend/boto3*/
+backend/botocore*/
+backend/certifi*/
+backend/charset_normalizer*/
+backend/dateutil/
+backend/dns/
+backend/dnspython*/
+backend/dotenv/
+backend/email_validator*/
+backend/fastapi*/
+backend/h11*/
+backend/httpcore*/
+backend/httpx*/
+backend/idna*/
+backend/jmespath*/
+backend/mangum*/
+backend/psycopg2*/
+backend/pydantic*/
+backend/pythonjsonlogger/
+backend/python_*/
+backend/requests*/
+backend/s3transfer*/
+backend/six*/
+backend/sniffio*/
+backend/starlette*/
+backend/tenacity*/
+backend/typing_extensions*/
+backend/urllib3*/
+backend/*.pyd
+backend/*.so
+backend/six.py
+backend/typing_extensions.py
+
 # Environment Variables
 .env
 .env.local
